@@ -1,0 +1,1 @@
+# lstm article https://medium.com/data-science/building-a-lstm-by-hand-on-pytorch-59c02a4ec091
