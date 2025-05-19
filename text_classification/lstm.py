@@ -94,7 +94,6 @@ class LSTM(nn.Module):
 
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
         self.rnn = LSTMBlock(embedding_dim, hidden_dim, modes=modes, n_layers=n_layers)
-        # self.rnn = nn.RNN(embedding_dim, hidden_dim, n_layers,dropout=drop_prob, batch_first=True)
         self.dropout = nn.Dropout(drop_prob)
         self.fc = nn.Linear(hidden_dim, output_size)
 
@@ -113,7 +112,7 @@ if __name__ == '__main__':
     hidden_dim_ = 256
     n_layers_ = 2
     vocab_size = 8507
-    modes = 'sum'
+    # modes = 'sum'
 
-    model = BiDirectionalRNN(output_size_, embedding_dim_, hidden_dim_, n_layers_, vocab_size, modes)
-    model(torch.randint(0, vocab_size, (50, 313)))
+    model = LSTM(output_size_, embedding_dim_, hidden_dim_, n_layers_, vocab_size).to(device)
+    model(torch.randint(0, vocab_size, (50, 313)).to(device))
