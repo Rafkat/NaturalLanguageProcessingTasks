@@ -61,7 +61,7 @@ class RNNBlock(nn.Module):
         super(RNNBlock, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
-        self.modes = [modes] * n_layers if isinstance(modes, str) else modes
+        self.modes = [modes] * n_layers if isinstance(modes, str) or modes is None else modes
         self.layers = nn.ModuleList(
             [RNNLayer(input_size, hidden_size, self.modes[0])] +
             [RNNLayer(hidden_size, hidden_size, self.modes[i + 1]) for i in range(n_layers - 1)]
@@ -77,7 +77,7 @@ class RNNBlock(nn.Module):
 
 
 class RNN(nn.Module):
-    def __init__(self, output_size, embedding_dim, hidden_dim, n_layers, vocab_size, modes, drop_prob=0.5):
+    def __init__(self, output_size, embedding_dim, hidden_dim, n_layers, vocab_size, modes=None, drop_prob=0.5):
         super(RNN, self).__init__()
         self.output_size = output_size
         self.n_layers = n_layers
@@ -106,5 +106,5 @@ if __name__ == '__main__':
     vocab_size = 8507
     modes = 'sum'
 
-    model = BiDirectionalRNN(output_size_, embedding_dim_, hidden_dim_, n_layers_, vocab_size, modes)
-    model(torch.randn(50, 313))
+    model = RNN(output_size_, embedding_dim_, hidden_dim_, n_layers_, vocab_size, modes).to(device)
+    model(torch.randint(0, vocab_size, (50, 313)).to(device))
