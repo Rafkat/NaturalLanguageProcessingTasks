@@ -41,8 +41,8 @@ class Attention(nn.Module):
 
     def forward(self, q, k, v, mask=None):
         q = self.to_q(self.norm(q))
-        k = self.to_q(self.norm(k))
-        v = self.to_q(self.norm(v))
+        k = self.to_k(self.norm(k))
+        v = self.to_v(self.norm(v))
 
         q = q.reshape(q.size(0), q.size(1), self.heads, -1).permute(0, 2, 1, 3)
         k = k.reshape(k.size(0), k.size(1), self.heads, -1).permute(0, 2, 1, 3)
@@ -75,28 +75,6 @@ class Encoder(nn.Module):
     def forward(self, x):
         for attn, ff in self.layers:
             x = attn(x, x, x) + x
-            x = self.norm(x)
-            x = ff(x) + x
-            x = self.norm(x)
-        return x
-
-
-class Decoder(nn.Module):
-    def __init__(self, input_size, depth, head_dim=64, num_heads=8, dropout=0.):
-        super(Decoder, self).__init__()
-        self.norm = nn.LayerNorm(input_size)
-        self.layers = nn.ModuleList([
-            nn.ModuleList([
-                Attention(input_size, head_dim, num_heads, dropout),
-                FeedForward(input_size, int(head_dim * num_heads), dropout)
-            ]) for _ in range(depth)
-        ])
-
-    def forward(self, enc_q, enc_k, x, mask):
-        for attn, ff in self.layers:
-            x = attn(x, x, x, mask) + x
-            x = self.norm(x)
-            x = attn(enc_q, enc_k, x) + x
             x = self.norm(x)
             x = ff(x) + x
             x = self.norm(x)

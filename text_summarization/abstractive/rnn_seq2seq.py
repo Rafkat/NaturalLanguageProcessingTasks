@@ -110,10 +110,16 @@ class RNNSeq2Seq(nn.Module):
 
         self.encoder = RNNEncoder(enc_vocab_size, embedding_dim, hidden_dim,
                                   n_layers=enc_layers, modes=encoder_modes)
-        self.decoder = RNNDecoder(dec_vocab_size, embedding_dim, hidden_dim,
-                                  n_layers=dec_layers, modes=decoder_modes)
+        if self.use_attention:
+            self.decoder = RNNDecoder(dec_vocab_size, embedding_dim + hidden_dim, hidden_dim,
+                                      n_layers=dec_layers, modes=decoder_modes)
+        else:
+            self.decoder = RNNDecoder(dec_vocab_size, embedding_dim, hidden_dim,
+                                      n_layers=dec_layers, modes=decoder_modes)
         self.decoder_embedder = nn.Embedding(dec_vocab_size, embedding_dim)
-        self.to_q = nn.Linear(embedding_dim, hidden_dim)
+        self.W_enc_out = nn.Linear(hidden_dim, hidden_dim)
+        self.W_hidden = nn.Linear(hidden_dim, hidden_dim)
+        self.V_weights = nn.Linear(hidden_dim, 1)
         self.to_out = nn.Linear(hidden_dim, embedding_dim)
 
     def forward(self, enc_input, target, teacher_forcing_ratio=0.5):
@@ -127,10 +133,11 @@ class RNNSeq2Seq(nn.Module):
         for t in range(seq_len):
             dec_input = self.decoder_embedder(dec_input.unsqueeze(1))
             if self.use_attention:
-                query = self.to_q(dec_input)
-                dots = torch.matmul(enc_output, query.transpose(-2, -1))
+                alignment = F.tanh(self.W_enc_out(enc_output) + self.W_hidden(hidden).unsqueeze(1))
+                dots = self.V_weights(alignment).squeeze(-1).unsqueeze(1)
                 attn = F.softmax(dots, dim=-1)
-                hidden = torch.matmul(attn.transpose(-2, -1), enc_output).squeeze(1)
+                context = torch.matmul(attn, enc_output)
+                dec_input = torch.cat((dec_input, context), dim=-1)
 
             output, hidden = self.decoder(dec_input, hidden)
 
