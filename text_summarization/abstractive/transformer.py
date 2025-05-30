@@ -4,6 +4,36 @@ from torch import nn
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
+class Utils:
+    pad_index = 0
+
+    @staticmethod
+    def get_pos_embed(len_seq, embedding_dim):
+        pos_embed = torch.zeros(1, len_seq, embedding_dim)
+        for k in range(len_seq):
+            for i in torch.arange(int(embedding_dim / 2)):
+                denominator = torch.pow(10000, 2 * i / embedding_dim)
+                pos_embed[:, k, 2 * i] = torch.sin(k / denominator)
+                pos_embed[:, k, 2 * i + 1] = torch.cos(k / denominator)
+        return pos_embed
+
+    @staticmethod
+    def make_trg_mask(target):
+        b, seq_len = target.shape
+        trg_mask = torch.tril(torch.ones((seq_len, seq_len))).expand(b, 1, seq_len, seq_len).to(device)
+        return trg_mask
+
+    @classmethod
+    def make_src_mask(cls, x):
+        return (x != cls.pad_index).unsqueeze(1).unsqueeze(2).to(device)
+
+    @classmethod
+    def make_combined_mask(cls, target):
+        look_ahead_mask = cls.make_trg_mask(target)
+        padding_mask = cls.make_src_mask(target)
+        return torch.logical_and(look_ahead_mask, padding_mask)
+
+
 class FeedForward(nn.Module):
     def __init__(self, input_size, hidden_size, dropout=0.):
         super(FeedForward, self).__init__()
@@ -64,9 +94,11 @@ class Attention(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, input_size, depth, head_dim=64, num_heads=8, dropout=0.):
+    def __init__(self, vocab_size, max_len_seq, input_size, depth, head_dim=64, num_heads=8, dropout=0.):
         super(Encoder, self).__init__()
         self.norm = nn.LayerNorm(input_size)
+        self.enc_embedding = nn.Embedding(vocab_size, input_size)
+        self.pos_embed = nn.Parameter(Utils.get_pos_embed(max_len_seq, input_size))
         self.layers = nn.ModuleList([
             nn.ModuleList([
                 Attention(input_size, head_dim, num_heads, dropout),
@@ -75,6 +107,8 @@ class Encoder(nn.Module):
         ])
 
     def forward(self, x, mask):
+        x = self.enc_embedding(x)
+        x = x + self.pos_embed
         for attn, ff in self.layers:
             x = attn(x, x, x, mask) + x
             x = self.norm(x)
@@ -84,9 +118,11 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, input_size, depth, head_dim=64, num_heads=8, dropout=0.):
+    def __init__(self, vocab_size, max_len_seq, input_size, depth, head_dim=64, num_heads=8, dropout=0.):
         super(Decoder, self).__init__()
         self.norm = nn.LayerNorm(input_size)
+        self.dec_embedding = nn.Embedding(vocab_size, input_size)
+        self.pos_embed = nn.Parameter(Utils.get_pos_embed(max_len_seq, input_size))
         self.layers = nn.ModuleList([
             nn.ModuleList([
                 Attention(input_size, head_dim, num_heads, dropout),
@@ -95,6 +131,8 @@ class Decoder(nn.Module):
         ])
 
     def forward(self, x, enc_k, enc_v, look_ahead_mask, padding_mask):
+        x = self.dec_embedding(x)
+        x = x + self.pos_embed
         for attn, ff in self.layers:
             x = attn(x, x, x, look_ahead_mask) + x
             x = self.norm(x)
@@ -110,44 +148,19 @@ class Transformer(nn.Module):
                  head_dim=64, num_heads=8, dropout=0., ):
         super(Transformer, self).__init__()
         self.pad_index = 0
-        self.enc_embedding = nn.Embedding(enc_vocab_size, embedding_dim)
-        self.dec_embedding = nn.Embedding(dec_vocab_size, embedding_dim)
-        self.encoder = Encoder(embedding_dim, enc_depth, head_dim, num_heads, dropout)
-        self.decoder = Decoder(embedding_dim, dec_depth, head_dim, num_heads, dropout)
+        self.encoder = Encoder(enc_vocab_size, enc_len_seq, embedding_dim, enc_depth, head_dim, num_heads, dropout)
+        self.decoder = Decoder(dec_vocab_size, dec_len_seq, embedding_dim, dec_depth, head_dim, num_heads, dropout)
         self.fc = nn.Linear(embedding_dim, dec_vocab_size)
-        self.enc_pos_embed = nn.Parameter(self.get_pos_embed(enc_len_seq, embedding_dim))
-        self.dec_pos_embed = nn.Parameter(self.get_pos_embed(dec_len_seq, embedding_dim))
 
-    def forward(self, enc_input, target):
-        padding_mask = self._make_src_mask(enc_input)
-        x = self.enc_embedding(enc_input)
-        x = x + self.enc_pos_embed
-        x = self.encoder(x, padding_mask)
-
-        target = self.dec_embedding(target)
-        target = target + self.dec_pos_embed
-        look_ahead_mask = self._make_trg_mask(target)
-        x = self.decoder(target, x, x, look_ahead_mask, padding_mask)
+    def forward(self, enc_input, target, enc_padding_mask=None, look_ahead_mask=None):
+        if not enc_padding_mask:
+            enc_padding_mask = Utils.make_src_mask(enc_input)
+        if not look_ahead_mask:
+            look_ahead_mask = Utils.make_combined_mask(target)
+        x = self.encoder(enc_input, enc_padding_mask)
+        x = self.decoder(target, x, x, look_ahead_mask, enc_padding_mask)
+        x = self.fc(x)
         return x
-
-    @staticmethod
-    def get_pos_embed(len_seq, embedding_dim):
-        pos_embed = torch.zeros(1, len_seq, embedding_dim)
-        for k in range(len_seq):
-            for i in torch.arange(int(embedding_dim / 2)):
-                denominator = torch.pow(10000, 2 * i / embedding_dim)
-                pos_embed[:, k, 2 * i] = torch.sin(k / denominator)
-                pos_embed[:, k, 2 * i + 1] = torch.cos(k / denominator)
-        return pos_embed
-
-    @staticmethod
-    def _make_trg_mask(target):
-        b, seq_len, _ = target.shape
-        trg_mask = torch.tril(torch.ones((seq_len, seq_len))).expand(b, 1, seq_len, seq_len).to(device)
-        return trg_mask
-
-    def _make_src_mask(self, x):
-        return (x != self.pad_index).unsqueeze(1).unsqueeze(2).to(device)
 
 
 if __name__ == '__main__':
@@ -161,4 +174,4 @@ if __name__ == '__main__':
 
     model = Transformer(enc_vocab_size=vocab_size, dec_vocab_size=dec_vocab_size_, enc_len_seq=80, dec_len_seq=10,
                         embedding_dim=embedding_dim_, enc_depth=n_layers_, dec_depth=n_layers_).to(device)
-    model(torch.randint(0, vocab_size, (50, 80)).to(device), torch.randint(0, dec_vocab_size_, (50, 10)).to(device))
+    model(torch.randint(0, vocab_size, (5, 80)).to(device), torch.randint(0, dec_vocab_size_, (5, 10)).to(device))

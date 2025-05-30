@@ -94,13 +94,28 @@ class GRUEncoder(nn.Module):
 
 
 class GRUDecoder(nn.Module):
-    def __init__(self, input_size, embedding_size, hidden_size, n_layers=2, modes=None):
+    def __init__(self, input_size, embedding_size, hidden_size, n_layers=2, modes=None, use_attention=False):
         super(GRUDecoder, self).__init__()
-        self.gru = GRUBlock(embedding_size, hidden_size, modes=modes, n_layers=n_layers)
+        self.use_attention = use_attention
+        if self.use_attention:
+            self.gru = GRUBlock(embedding_size + hidden_size, hidden_size, modes=modes, n_layers=n_layers)
+        else:
+            self.gru = GRUBlock(embedding_size, hidden_size, modes=modes, n_layers=n_layers)
         self.out = nn.Linear(hidden_size, input_size)
+        self.decoder_embedder = nn.Embedding(input_size, embedding_size)
+        self.W_enc_out = nn.Linear(hidden_size, hidden_size)
+        self.W_hidden = nn.Linear(hidden_size, hidden_size)
+        self.V_weights = nn.Linear(hidden_size, 1)
 
-    def forward(self, x, hidden_state):
-        out, hidden = self.gru(x, hidden_state)
+    def forward(self, x, enc_output, hidden_state):
+        dec_input = self.decoder_embedder(x.unsqueeze(1))
+        if self.use_attention:
+            alignment = F.tanh(self.W_enc_out(enc_output) + self.W_hidden(hidden_state).unsqueeze(1))
+            dots = self.V_weights(alignment).squeeze(-1).unsqueeze(1)
+            attn = F.softmax(dots, dim=-1)
+            context = torch.matmul(attn, enc_output)
+            dec_input = torch.cat((dec_input, context), dim=-1)
+        out, hidden = self.gru(dec_input, hidden_state)
         prediction = self.out(out.squeeze(1))
         return prediction, hidden
 
@@ -111,16 +126,11 @@ class GRUSeq2Seq(nn.Module):
         super(GRUSeq2Seq, self).__init__()
         self.dec_vocab_size = dec_vocab_size
         self.hidden_dim = hidden_dim
-        self.use_attention = attention
 
         self.encoder = GRUEncoder(enc_vocab_size, embedding_dim, hidden_dim,
                                   n_layers=enc_layers, modes=encoder_modes)
         self.decoder = GRUDecoder(dec_vocab_size, embedding_dim, hidden_dim,
-                                  n_layers=dec_layers, modes=decoder_modes)
-        self.decoder_embedder = nn.Embedding(dec_vocab_size, embedding_dim)
-        self.W_enc_out = nn.Linear(hidden_dim, hidden_dim)
-        self.W_dec_in = nn.Linear(embedding_dim, hidden_dim)
-        self.V_weights = nn.Linear(hidden_dim, 1)
+                                  n_layers=dec_layers, modes=decoder_modes, use_attention=attention)
         self.to_out = nn.Linear(hidden_dim, embedding_dim)
 
     def forward(self, enc_input, target, teacher_forcing_ratio=0.5):
@@ -132,14 +142,7 @@ class GRUSeq2Seq(nn.Module):
         dec_input = target[:, 0]
 
         for t in range(seq_len):
-            dec_input = self.decoder_embedder(dec_input.unsqueeze(1))
-            if self.use_attention:
-                alignment = F.tanh(self.W_enc_out(enc_output) + self.W_dec_in(dec_input))
-                dots = self.V_weights(alignment).squeeze(-1).unsqueeze(1)
-                attn = F.softmax(dots, dim=-1)
-                hidden = torch.matmul(attn, enc_output).squeeze(1)
-
-            output, hidden = self.decoder(dec_input, hidden)
+            output, hidden = self.decoder(dec_input, enc_output, hidden)
 
             outputs[:, t, :] = output
 
