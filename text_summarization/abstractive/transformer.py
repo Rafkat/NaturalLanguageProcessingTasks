@@ -8,6 +8,16 @@ class Utils:
     pad_index = 0
 
     @staticmethod
+    def get_pos_embed_test(len_seq, embedding_dim):
+        pe = torch.zeros(len_seq, embedding_dim, device=device)
+        position = torch.arange(0, len_seq, dtype=torch.float, device=device).unsqueeze(1)
+        div_term = torch.pow(10_000, (-torch.arange(0, embedding_dim, 2, device=device).float() / embedding_dim))
+
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        return pe
+
+    @staticmethod
     def get_pos_embed(len_seq, embedding_dim):
         pos_embed = torch.zeros(1, len_seq, embedding_dim)
         for k in range(len_seq):
@@ -96,31 +106,36 @@ class Attention(nn.Module):
 class Encoder(nn.Module):
     def __init__(self, vocab_size, max_len_seq, input_size, depth, head_dim=64, num_heads=8, dropout=0.):
         super(Encoder, self).__init__()
-        self.norm = nn.LayerNorm(input_size)
+        self.norm1 = nn.LayerNorm(input_size)
+        self.norm2 = nn.LayerNorm(input_size)
         self.enc_embedding = nn.Embedding(vocab_size, input_size)
-        self.pos_embed = nn.Parameter(Utils.get_pos_embed(max_len_seq, input_size))
+        self.pos_embed = nn.Parameter(Utils.get_pos_embed_test(max_len_seq, input_size).unsqueeze(0))
+        # self.pos_embed = nn.Parameter(Utils.get_pos_embed(max_len_seq, input_size))
         self.layers = nn.ModuleList([
             nn.ModuleList([
                 Attention(input_size, head_dim, num_heads, dropout),
                 FeedForward(input_size, int(head_dim * num_heads), dropout)
             ]) for _ in range(depth)
         ])
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask):
         x = self.enc_embedding(x)
-        x = x + self.pos_embed
+        x = self.dropout(x + self.pos_embed)
         for attn, ff in self.layers:
-            x = attn(x, x, x, mask) + x
-            x = self.norm(x)
-            x = ff(x) + x
-            x = self.norm(x)
+            x = self.dropout(attn(x, x, x, mask)) + x
+            x = self.norm1(x)
+            x = self.dropout(ff(x)) + x
+            x = self.norm2(x)
         return x
 
 
 class Decoder(nn.Module):
     def __init__(self, vocab_size, max_len_seq, input_size, depth, head_dim=64, num_heads=8, dropout=0.):
         super(Decoder, self).__init__()
-        self.norm = nn.LayerNorm(input_size)
+        self.norm1 = nn.LayerNorm(input_size)
+        self.norm2 = nn.LayerNorm(input_size)
+        self.norm3 = nn.LayerNorm(input_size)
         self.dec_embedding = nn.Embedding(vocab_size, input_size)
         self.pos_embed = nn.Parameter(Utils.get_pos_embed(max_len_seq, input_size))
         self.layers = nn.ModuleList([
@@ -129,23 +144,24 @@ class Decoder(nn.Module):
                 FeedForward(input_size, int(head_dim * num_heads), dropout)
             ]) for _ in range(depth)
         ])
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, enc_k, enc_v, look_ahead_mask, padding_mask):
         x = self.dec_embedding(x)
-        x = x + self.pos_embed
+        x = self.dropout(x + self.pos_embed)
         for attn, ff in self.layers:
-            x = attn(x, x, x, look_ahead_mask) + x
-            x = self.norm(x)
-            x = attn(x, enc_k, enc_v, padding_mask) + x
-            x = self.norm(x)
-            x = ff(x) + x
-            x = self.norm(x)
+            x = self.dropout(attn(x, x, x, look_ahead_mask)) + x
+            x = self.norm1(x)
+            x = self.dropout(attn(x, enc_k, enc_v, padding_mask)) + x
+            x = self.norm2(x)
+            x = self.dropout(ff(x)) + x
+            x = self.norm3(x)
         return x
 
 
 class Transformer(nn.Module):
     def __init__(self, enc_vocab_size, dec_vocab_size, enc_len_seq, dec_len_seq, embedding_dim, enc_depth, dec_depth,
-                 head_dim=64, num_heads=8, dropout=0., ):
+                 head_dim=64, num_heads=8, dropout=0.1):
         super(Transformer, self).__init__()
         self.pad_index = 0
         self.encoder = Encoder(enc_vocab_size, enc_len_seq, embedding_dim, enc_depth, head_dim, num_heads, dropout)
@@ -153,9 +169,9 @@ class Transformer(nn.Module):
         self.fc = nn.Linear(embedding_dim, dec_vocab_size)
 
     def forward(self, enc_input, target, enc_padding_mask=None, look_ahead_mask=None):
-        if not enc_padding_mask:
+        if enc_padding_mask is None:
             enc_padding_mask = Utils.make_src_mask(enc_input)
-        if not look_ahead_mask:
+        if look_ahead_mask is None:
             look_ahead_mask = Utils.make_combined_mask(target)
         x = self.encoder(enc_input, enc_padding_mask)
         x = self.decoder(target, x, x, look_ahead_mask, enc_padding_mask)
