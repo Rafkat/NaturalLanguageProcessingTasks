@@ -99,12 +99,13 @@ class Attention(nn.Module):
         attn = self.dropout(self.attn(dots))
 
         out = torch.matmul(attn, v)
-        out = out.view(out.size(0), out.size(2), -1)
+        out = out.transpose(1, 2).reshape(out.size(0), out.size(2), -1)
         return self.to_out(out)
 
 
 class Encoder(nn.Module):
-    def __init__(self, vocab_size, max_len_seq, input_size, depth, head_dim=64, num_heads=8, dropout=0.):
+    def __init__(self, vocab_size, max_len_seq, input_size, depth, hidden_dim=2048, head_dim=64, num_heads=8,
+                 dropout=0.):
         super(Encoder, self).__init__()
         self.norm1 = nn.LayerNorm(input_size)
         self.norm2 = nn.LayerNorm(input_size)
@@ -114,7 +115,7 @@ class Encoder(nn.Module):
         self.layers = nn.ModuleList([
             nn.ModuleList([
                 Attention(input_size, head_dim, num_heads, dropout),
-                FeedForward(input_size, int(head_dim * num_heads), dropout)
+                FeedForward(input_size, hidden_dim, dropout)
             ]) for _ in range(depth)
         ])
         self.dropout = nn.Dropout(dropout)
@@ -131,7 +132,8 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, vocab_size, max_len_seq, input_size, depth, head_dim=64, num_heads=8, dropout=0.):
+    def __init__(self, vocab_size, max_len_seq, input_size, depth, hidden_dim=2048, head_dim=64, num_heads=8,
+                 dropout=0.):
         super(Decoder, self).__init__()
         self.norm1 = nn.LayerNorm(input_size)
         self.norm2 = nn.LayerNorm(input_size)
@@ -141,7 +143,7 @@ class Decoder(nn.Module):
         self.layers = nn.ModuleList([
             nn.ModuleList([
                 Attention(input_size, head_dim, num_heads, dropout),
-                FeedForward(input_size, int(head_dim * num_heads), dropout)
+                FeedForward(input_size, hidden_dim, dropout)
             ]) for _ in range(depth)
         ])
         self.dropout = nn.Dropout(dropout)
@@ -161,11 +163,15 @@ class Decoder(nn.Module):
 
 class Transformer(nn.Module):
     def __init__(self, enc_vocab_size, dec_vocab_size, enc_len_seq, dec_len_seq, embedding_dim, enc_depth, dec_depth,
-                 head_dim=64, num_heads=8, dropout=0.1):
+                 hidden_dim=2048, head_dim=64, num_heads=8, dropout=0.1):
         super(Transformer, self).__init__()
         self.pad_index = 0
-        self.encoder = Encoder(enc_vocab_size, enc_len_seq, embedding_dim, enc_depth, head_dim, num_heads, dropout)
-        self.decoder = Decoder(dec_vocab_size, dec_len_seq, embedding_dim, dec_depth, head_dim, num_heads, dropout)
+        self.encoder = Encoder(enc_vocab_size, enc_len_seq, embedding_dim, enc_depth,
+                               head_dim=head_dim, num_heads=num_heads,
+                               hidden_dim=hidden_dim, dropout=dropout)
+        self.decoder = Decoder(dec_vocab_size, dec_len_seq, embedding_dim, dec_depth,
+                               head_dim=head_dim, num_heads=num_heads,
+                               hidden_dim=hidden_dim, dropout=dropout)
         self.fc = nn.Linear(embedding_dim, dec_vocab_size)
 
     def forward(self, enc_input, target, enc_padding_mask=None, look_ahead_mask=None):
@@ -182,12 +188,12 @@ class Transformer(nn.Module):
 if __name__ == '__main__':
     epochs = 20
     output_size_ = 3
-    embedding_dim_ = 400
-    hidden_dim_ = 256
+    embedding_dim_ = 512
+    hidden_dim_ = 2048
     n_layers_ = 2
     vocab_size = 51773
     dec_vocab_size_ = 14144
 
-    model = Transformer(enc_vocab_size=vocab_size, dec_vocab_size=dec_vocab_size_, enc_len_seq=80, dec_len_seq=10,
+    model = Transformer(enc_vocab_size=vocab_size, dec_vocab_size=dec_vocab_size_, enc_len_seq=100, dec_len_seq=99,
                         embedding_dim=embedding_dim_, enc_depth=n_layers_, dec_depth=n_layers_).to(device)
-    model(torch.randint(0, vocab_size, (5, 80)).to(device), torch.randint(0, dec_vocab_size_, (5, 10)).to(device))
+    model(torch.randint(0, vocab_size, (1, 100)).to(device), torch.randint(0, dec_vocab_size_, (1, 99)).to(device))
