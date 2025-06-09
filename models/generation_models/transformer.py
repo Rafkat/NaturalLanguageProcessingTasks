@@ -81,16 +81,16 @@ class Encoder(nn.Module):
         return x
 
 
-class TransformerClassifier(nn.Module):
-    def __init__(self, vocab_size, max_len_seq, embedding_dim, enc_depth, hidden_dim=2048,
-                 head_dim=64, num_heads=8, dropout=0., nb_classes=10):
-        super(TransformerClassifier, self).__init__()
+class Transformer(nn.Module):
+    def __init__(self, vocab_size, max_len_seq, embedding_dim, enc_depth,
+                 hidden_dim=2048, head_dim=64, num_heads=8, dropout=0.):
+        super(Transformer, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
         self.encoder = Encoder(embedding_dim, enc_depth, hidden_dim, head_dim, num_heads, dropout)
-        self.fc = nn.Linear(embedding_dim, nb_classes)
+        self.fc = nn.Linear(embedding_dim, vocab_size)
         self.cls_token = nn.Parameter(torch.randn(1, 1, embedding_dim))
-        self.pos_embed = torch.zeros(1, max_len_seq + 1, embedding_dim)
-        for k in range(max_len_seq + 1):
+        self.pos_embed = torch.zeros(1, max_len_seq, embedding_dim)
+        for k in range(max_len_seq):
             for i in torch.arange(int(embedding_dim / 2)):
                 denominator = torch.pow(10000, 2 * i / embedding_dim)
                 self.pos_embed[:, k, 2 * i] = torch.sin(k / denominator)
@@ -99,11 +99,11 @@ class TransformerClassifier(nn.Module):
 
     def forward(self, x):
         x = self.embedding(x)
-        cls_token = self.cls_token.expand(x.size(0), -1, -1)
-        x = torch.cat((cls_token, x), dim=1)
         x = x + self.pos_embed
         x = self.encoder(x)
-        x = self.fc(x[:, 0, :])
+        b, seq_len, _ = x.shape
+        x = self.fc(x.view(b * seq_len, -1))
+        x = x.view(b, seq_len, -1)
         return x
 
 
@@ -115,6 +115,6 @@ if __name__ == '__main__':
     n_layers_ = 2
     vocab_size = 8507
 
-    model = TransformerClassifier(vocab_size, 313, embedding_dim_, enc_depth=n_layers_, nb_classes=output_size_).to(
+    model = Transformer(vocab_size, 313, embedding_dim_, enc_depth=n_layers_).to(
         device)
     model(torch.randint(0, vocab_size, (50, 313)).to(device))
